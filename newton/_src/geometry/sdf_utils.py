@@ -31,7 +31,7 @@ SignMethod = Literal["auto", "parity", "winding", "normal"]
 def _resolve_paired_samples_flag(paired_samples: bool, device: wp.DeviceLike | None) -> bool:
     """Return whether paired SDF texture sampling is safe on the target device."""
     device = wp.get_device(device)
-    if paired_samples and device.is_cuda and device.arch < 90:
+    if paired_samples and device.is_cuda and not getattr(device, "is_hip", False) and device.arch < 90:
         # CUDA toolkits before 13.1 can miscompile kernels that mix scalar and vector texture
         # fetches on pre-SM90 devices, so fall back to the scalar layout.
         toolkit_version = wp.get_cuda_toolkit_version()

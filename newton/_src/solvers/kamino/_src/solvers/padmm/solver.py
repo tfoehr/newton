@@ -411,7 +411,9 @@ class PADMMSolver:
 
         # Iterate until convergence or maximum number of iterations is reached
         step_fn = self._step_accel if self._use_acceleration else self._step
-        if self._use_graph_conditionals:
+        if self._use_graph_conditionals and (
+            not wp.get_device().is_capturing or wp.is_conditional_graph_supported()
+        ):
             wp.capture_while(self._data.state.done, while_body=step_fn, problem=problem)
         else:
             for _ in range(self._max_of_max_iters):

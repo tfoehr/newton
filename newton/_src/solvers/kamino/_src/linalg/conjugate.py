@@ -385,7 +385,7 @@ def _run_capturable_loop(
             callback_launch.launch()
 
     if use_graph and device.is_capturing:
-        if use_graph_conditionals:
+        if use_graph_conditionals and wp.is_conditional_graph_supported():
             wp.capture_while(global_condition, do_cycle_with_condition)
         else:
             for _ in range(0, int(maxiter_host), loop_granularity):
