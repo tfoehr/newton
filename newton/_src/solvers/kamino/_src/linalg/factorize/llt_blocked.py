@@ -20,6 +20,7 @@ from ._tile_builtins import (
 ###
 
 __all__ = [
+    "fit_llt_blocked_block_size",
     "llt_blocked_factorize",
     "llt_blocked_solve",
     "llt_blocked_solve_inplace",
@@ -71,6 +72,47 @@ wp.set_module_options({"enable_backward": False, "default_grid_stride": False})
 #                 T[row, col] = value
 
 #     return tile_pad
+
+
+###
+# Shared memory budget
+###
+
+LLT_BLOCKED_FACTORIZE_SHARED_TILES: float = 5.0
+"""Shared memory of the blocked factorize kernels, in ``block_size x block_size`` float32 tiles.
+
+Warp reserves shared memory for every tile expression of a kernel, so this counts the tile
+expressions of the factorize kernels (the RCM variant included)."""
+
+LLT_BLOCKED_SOLVE_SHARED_TILES: float = 4.25
+"""Shared memory of the blocked solve kernels (tiles plus the native transpose-update staging)."""
+
+_LLT_BLOCKED_STATIC_SHARED_RESERVE: int = 2048
+"""Headroom for the static shared memory Warp reserves per kernel (it grows with block_dim)."""
+
+
+def fit_llt_blocked_block_size(
+    block_size: int, device: wp.DeviceLike = None, shared_tiles: float = LLT_BLOCKED_FACTORIZE_SHARED_TILES
+) -> int:
+    """Return the largest tile size up to ``block_size`` whose tiles fit in a block's shared memory.
+
+    Halves ``block_size`` while ``shared_tiles`` float32 tiles of that size would exceed the
+    device's maximum shared memory per block, e.g. 64 KiB on AMD RDNA GPUs and on some older
+    NVIDIA GPUs, where 64x64 factorization tiles (80 KiB) cannot launch. CPU devices and
+    devices without a reported limit keep ``block_size``.
+    """
+    device = wp.get_device(device)
+    limit = int(getattr(device, "max_shared_memory_per_block", 0) or 0) if device.is_cuda else 0
+    if limit <= 0:
+        return block_size
+
+    def required(size: int) -> float:
+        return shared_tiles * size * size * 4 + _LLT_BLOCKED_STATIC_SHARED_RESERVE
+
+    fitted = block_size
+    while fitted > 8 and fitted % 2 == 0 and required(fitted) > limit:
+        fitted //= 2
+    return fitted
 
 
 ###

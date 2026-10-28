@@ -4,6 +4,9 @@
 """KAMINO: Linear Algebra: Matrix factorization implementations (kernels and launchers)"""
 
 from .llt_blocked import (
+    LLT_BLOCKED_FACTORIZE_SHARED_TILES,
+    LLT_BLOCKED_SOLVE_SHARED_TILES,
+    fit_llt_blocked_block_size,
     llt_blocked_factorize,
     llt_blocked_solve,
     llt_blocked_solve_inplace,
@@ -25,9 +28,12 @@ from .llt_sequential import (
 ###
 
 __all__ = [
+    "LLT_BLOCKED_FACTORIZE_SHARED_TILES",
+    "LLT_BLOCKED_SOLVE_SHARED_TILES",
     "_llt_sequential_factorize",
     "_llt_sequential_solve",
     "_llt_sequential_solve_inplace",
+    "fit_llt_blocked_block_size",
     "llt_blocked_factorize",
     "llt_blocked_solve",
     "llt_blocked_solve_inplace",

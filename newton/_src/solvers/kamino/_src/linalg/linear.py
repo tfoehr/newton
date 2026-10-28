@@ -629,10 +629,19 @@ class LLTBlockedSolver(DirectSolver[ScalarType, IndexType]):
         self._solve_block_dim: int = solve_block_dim
         self._factorize_block_dim: int = factorize_block_dim
 
-        # Create the factorization and solve kernels
-        self._factorize_kernel = factorize.make_llt_blocked_factorize_kernel(self._factorize_block_size)
-        self._solve_kernel = factorize.make_llt_blocked_solve_kernel(self._solve_block_size)
-        self._solve_inplace_kernel = factorize.make_llt_blocked_solve_inplace_kernel(self._solve_block_size)
+        # Create the factorization and solve kernels, with tiles shrunk where the requested
+        # sizes exceed the device's shared memory per block (the dense L layout does not
+        # depend on the tile size).
+        kernel_device = wp.get_device(device)
+        factorize_tile = factorize.fit_llt_blocked_block_size(
+            self._factorize_block_size, kernel_device, factorize.LLT_BLOCKED_FACTORIZE_SHARED_TILES
+        )
+        solve_tile = factorize.fit_llt_blocked_block_size(
+            self._solve_block_size, kernel_device, factorize.LLT_BLOCKED_SOLVE_SHARED_TILES
+        )
+        self._factorize_kernel = factorize.make_llt_blocked_factorize_kernel(factorize_tile)
+        self._solve_kernel = factorize.make_llt_blocked_solve_kernel(solve_tile)
+        self._solve_inplace_kernel = factorize.make_llt_blocked_solve_inplace_kernel(solve_tile)
 
         # Initialize base class members
         super().__init__(
