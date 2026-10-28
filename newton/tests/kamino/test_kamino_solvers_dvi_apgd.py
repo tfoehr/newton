@@ -382,6 +382,8 @@ class TestDVIAPGD(unittest.TestCase):
         """Capture each loop body once, even when all three iteration budgets grow."""
         if not wp.is_cuda_available():
             self.skipTest("CUDA graph structure requires a CUDA device")
+        if not wp.is_conditional_graph_supported():
+            self.skipTest("Conditional graph nodes are not supported on this device")
         counts = []
         for budget in (2, 128):
             solver, problem = _problem(
