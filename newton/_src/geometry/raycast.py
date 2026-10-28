@@ -26,19 +26,6 @@ _DEFAULT_MESH_MAX_T = 1.0e6
 
 
 @wp.func
-def _spinlock_acquire(lock: wp.array[wp.int32]):
-    # Try to acquire the lock by setting it to 1 if it's 0
-    while wp.atomic_cas(lock, 0, 0, 1) == 1:
-        pass
-
-
-@wp.func
-def _spinlock_release(lock: wp.array[wp.int32]):
-    # Release the lock by setting it back to 0
-    wp.atomic_exch(lock, 0, 0)
-
-
-@wp.func
 def safe_div_vec3(x: wp.vec3, y: wp.vec3) -> wp.vec3:
     """Component-wise division that substitutes ``EPSILON`` for zero denominators."""
     return wp.vec3(
@@ -819,8 +806,8 @@ def raycast_kernel(
     # Ray
     ray_origin: wp.vec3,
     ray_direction: wp.vec3,
-    # Lock helper
-    lock: wp.array[wp.int32],
+    # Pass selector, see below
+    stage: int,
     # Output
     min_dist: wp.array[float],
     min_index: wp.array[int],
@@ -831,6 +818,12 @@ def raycast_kernel(
     visible_worlds_mask: wp.array[int],
 ):
     """Computes the intersection of a ray with all geometries in the scene.
+
+    The closest hit is found without locks, which deadlock on GPUs without independent thread
+    scheduling: launch with ``stage=0`` to reduce the hit distance into ``min_dist``, then with
+    ``stage=1`` to record the index of a shape hit at exactly that distance in ``min_index``,
+    then with ``stage=2`` to record that shape's body in ``min_body_index``. ``stage=0`` alone
+    is enough when only the distance is needed.
 
     HFIELD shapes use their ``wp.Mesh`` ID from ``shape_source_ptr``; the mesh is
     built during :meth:`~newton.ModelBuilder.finalize`.
@@ -844,7 +837,7 @@ def raycast_kernel(
         shape_source_ptr: Array of mesh IDs for MESH, CONVEX_MESH, and HFIELD geometries (wp.uint64).
         ray_origin: The origin of the ray.
         ray_direction: The direction of the ray.
-        lock: Lock array used for synchronization. Expected to be initialized to 0.
+        stage: Pass to run, 0, 1 or 2 (see above).
         min_dist: A single-element array to store the minimum intersection distance. Expected to be initialized to a large value like 1e10.
         min_index: A single-element array to store the index of the closest geometry. Expected to be initialized to -1.
         min_body_index: A single-element array to store the body index of the closest geometry. Expected to be initialized to -1.
@@ -853,6 +846,11 @@ def raycast_kernel(
         visible_worlds_mask: Optional mask array (1=visible, 0=hidden per world). Can be empty to disable filtering.
     """
     shape_idx = wp.tid()
+
+    if stage == 2:
+        if shape_idx == min_index[0]:
+            min_body_index[0] = shape_body[shape_idx]
+        return
 
     # Skip shapes from non-visible worlds
     if visible_worlds_mask and shape_world.shape[0] > 0:
@@ -903,14 +901,12 @@ def raycast_kernel(
             False,
         )
 
-    if t >= 0.0 and t < min_dist[0]:
-        _spinlock_acquire(lock)
-        # Still use an atomic inside the spinlock to get a volatile read
-        old_min = wp.atomic_min(min_dist, 0, t)
-        if t <= old_min:
-            min_index[0] = shape_idx
-            min_body_index[0] = b
-        _spinlock_release(lock)
+    if t >= 0.0:
+        if stage == 0:
+            wp.atomic_min(min_dist, 0, t)
+        elif t == min_dist[0]:
+            # Shapes hit at the same distance: keep the highest index, independent of thread order
+            wp.atomic_max(min_index, 0, shape_idx)
 
 
 def intersect_ray(

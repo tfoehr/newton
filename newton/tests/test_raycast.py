@@ -605,7 +605,6 @@ def test_ray_intersect_heightfield_scaled(test: TestRaycast, device: str):
         min_dist = wp.array([1.0e10], dtype=float, device=device)
         min_index = wp.array([-1], dtype=int, device=device)
         min_body_index = wp.array([-1], dtype=int, device=device)
-        lock = wp.array([0], dtype=wp.int32, device=device)
         empty_world = wp.array([], dtype=int, device=device)
         empty_offsets = wp.array([], dtype=wp.vec3, device=device)
         empty_mask = wp.array([], dtype=int, device=device)
@@ -621,7 +620,7 @@ def test_ray_intersect_heightfield_scaled(test: TestRaycast, device: str):
                 model.shape_source_ptr,
                 origin,
                 direction,
-                lock,
+                0,
             ],
             outputs=[min_dist, min_index, min_body_index, empty_world, empty_offsets, empty_mask],
             device=device,
