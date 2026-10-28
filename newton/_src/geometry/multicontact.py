@@ -522,7 +522,9 @@ def approx_max_quadrilateral_area_with_calipers(hull: wp.array[wp.vec2], hull_co
         hull_i = hull[i]
         hull_i_plus_1 = hull[(i + 1) % n]
 
-        while True:
+        # Bounded by one lap around the hull: on a convex hull the area stops increasing before
+        # that, but inconsistent rounding between the two area evaluations must not loop forever.
+        for _step in range(n):
             hull_j = hull[j]
             hull_j_plus_1 = hull[(j + 1) % n]
 
