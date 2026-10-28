@@ -59,7 +59,6 @@ class Picking:
         self.min_dist = None
         self.min_index = None
         self.min_body_index = None
-        self.lock = None
         self._contact_points0 = None
         self._contact_points1 = None
         self._debug = False
@@ -236,12 +235,10 @@ class Picking:
             self.min_dist = wp.array([1.0e10], dtype=float, device=self.model.device)
             self.min_index = wp.array([-1], dtype=int, device=self.model.device)
             self.min_body_index = wp.array([-1], dtype=int, device=self.model.device)
-            self.lock = wp.array([0], dtype=wp.int32, device=self.model.device)
         else:
             self.min_dist.fill_(1.0e10)
             self.min_index.fill_(-1)
             self.min_body_index.fill_(-1)
-            self.lock.zero_()
 
         # Get world offsets if available
         shape_world = (
@@ -254,30 +251,32 @@ class Picking:
         else:
             world_offsets = wp.array([], dtype=wp.vec3, device=self.model.device)
 
-        wp.launch(
-            kernel=raycast.raycast_kernel,
-            dim=num_geoms,
-            inputs=[
-                state.body_q,
-                self.model.shape_body,
-                self.model.shape_transform,
-                self.model.shape_type,
-                self.model.shape_scale,
-                self.model.shape_source_ptr,
-                p,
-                d,
-                self.lock,
-            ],
-            outputs=[
-                self.min_dist,
-                self.min_index,
-                self.min_body_index,
-                shape_world,
-                world_offsets,
-                self.visible_worlds_mask,
-            ],
-            device=self.model.device,
-        )
+        # Closest distance, then the shape hit at that distance, then its body
+        for stage in range(3):
+            wp.launch(
+                kernel=raycast.raycast_kernel,
+                dim=num_geoms,
+                inputs=[
+                    state.body_q,
+                    self.model.shape_body,
+                    self.model.shape_transform,
+                    self.model.shape_type,
+                    self.model.shape_scale,
+                    self.model.shape_source_ptr,
+                    p,
+                    d,
+                    stage,
+                ],
+                outputs=[
+                    self.min_dist,
+                    self.min_index,
+                    self.min_body_index,
+                    shape_world,
+                    world_offsets,
+                    self.visible_worlds_mask,
+                ],
+                device=self.model.device,
+            )
         wp.synchronize()
 
         dist = self.min_dist.numpy()[0]
