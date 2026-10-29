@@ -1804,7 +1804,13 @@ def _solve_dvi_sparse_inequalities_pgs(
 
 @wp.func_native(
     """
-#if defined(__CUDA_ARCH__)
+#if defined(__HIP_DEVICE_COMPILE__)
+    float r = value;
+    #pragma unroll
+    for (int offset = width / 2; offset > 0; offset >>= 1)
+        r += __shfl_xor(r, offset, width);
+    return r;
+#elif defined(__CUDA_ARCH__)
     float r = value;
     #pragma unroll
     for (int offset = width / 2; offset > 0; offset >>= 1)
@@ -1820,7 +1826,9 @@ def _subgroup_sum(value: float32, width: int32 = 32) -> float32: ...
 
 @wp.func_native(
     """
-#if defined(__CUDA_ARCH__)
+#if defined(__HIP_DEVICE_COMPILE__)
+    return __shfl(value, 0, 32);
+#elif defined(__CUDA_ARCH__)
     return __shfl_sync(0xffffffffu, value, 0, 32);
 #else
     return value;
@@ -1831,7 +1839,9 @@ def _broadcast_lane_0_32(value: float32) -> float32: ...
 
 
 @wp.func_native("""
-#if defined(__CUDA_ARCH__)
+#if defined(__HIP_DEVICE_COMPILE__)
+    return __shfl(value, lane, 32);
+#elif defined(__CUDA_ARCH__)
     return __shfl_sync(0xffffffffu, value, lane, 32);
 #else
     return value;
@@ -1842,7 +1852,9 @@ def _shuffle_lane_32(value: float32, lane: int32) -> float32: ...
 
 @wp.func_native(
     """
-#if defined(__CUDA_ARCH__)
+#if defined(__HIP_DEVICE_COMPILE__)
+    __syncwarp();
+#elif defined(__CUDA_ARCH__)
     __syncwarp(0xffffffffu);
 #endif
     """

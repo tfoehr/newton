@@ -240,7 +240,13 @@ def _scatter_bilateral_solution(
 
 @wp.func_native(
     """
-#if defined(__CUDA_ARCH__)
+#if defined(__HIP_DEVICE_COMPILE__)
+    float r = value;
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1)
+        r = fmaxf(r, __shfl_xor(r, offset, 32));
+    return r;
+#elif defined(__CUDA_ARCH__)
     float r = value;
     #pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1)
@@ -432,7 +438,7 @@ def _set_dvi_bilateral_active_dim(
 
 
 @wp.func_native("""
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
 __syncthreads();
 #endif
 """)
@@ -440,7 +446,9 @@ def _sync_threads(): ...
 
 
 @wp.func_native("""
-#if defined(__CUDA_ARCH__)
+#if defined(__HIP_DEVICE_COMPILE__)
+__syncwarp();
+#elif defined(__CUDA_ARCH__)
 __syncwarp(0xffffffffu);
 #endif
 """)
@@ -530,7 +538,13 @@ def _assemble_bilateral_contact_response(
 
 @wp.func_native(
     """
-#if defined(__CUDA_ARCH__)
+#if defined(__HIP_DEVICE_COMPILE__)
+    float r = value;
+    #pragma unroll
+    for (int offset = 8; offset > 0; offset >>= 1)
+        r += __shfl_xor(r, offset, 16);
+    return r;
+#elif defined(__CUDA_ARCH__)
     float r = value;
     #pragma unroll
     for (int offset = 8; offset > 0; offset >>= 1)
@@ -546,7 +560,13 @@ def _subgroup_sum_16(value: float32) -> float32: ...
 
 @wp.func_native(
     """
-#if defined(__CUDA_ARCH__)
+#if defined(__HIP_DEVICE_COMPILE__)
+    int r = value;
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1)
+        r = min(r, __shfl_xor(r, offset, 32));
+    return r;
+#elif defined(__CUDA_ARCH__)
     int r = value;
     #pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1)

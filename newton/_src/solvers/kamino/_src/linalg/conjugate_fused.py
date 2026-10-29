@@ -46,7 +46,11 @@ __all__ = [
     """
     float r = v;
     for (int o = width >> 1; o > 0; o >>= 1)
+#if defined(__HIP_DEVICE_COMPILE__)
+        r += __shfl_xor(r, o, width);  // HIP *_sync shuffles require a 64-bit lane mask
+#else
         r += __shfl_xor_sync(0xffffffffu, r, o, width);
+#endif
     return r;
     """
 )
@@ -59,7 +63,11 @@ def warp_subreduce_sum(v: wp.float32, width: wp.int32) -> wp.float32: ...
     float r = v;
     #pragma unroll
     for (int o = 16; o > 0; o >>= 1)
+#if defined(__HIP_DEVICE_COMPILE__)
+        r += __shfl_xor(r, o, 32);  // HIP *_sync shuffles require a 64-bit lane mask
+#else
         r += __shfl_xor_sync(0xffffffffu, r, o, 32);
+#endif
     return r;
     """
 )

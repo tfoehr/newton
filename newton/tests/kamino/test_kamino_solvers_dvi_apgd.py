@@ -382,6 +382,9 @@ class TestDVIAPGD(unittest.TestCase):
         """Capture each loop body once, even when all three iteration budgets grow."""
         if not wp.is_cuda_available():
             self.skipTest("CUDA graph structure requires a CUDA device")
+        if not wp.is_conditional_graph_supported() or getattr(wp.get_device("cuda:0"), "is_hip", False):
+            # HIP has no conditional graph nodes; Warp emulates them with segmented graphs.
+            self.skipTest("Native conditional graph nodes are not available on this device")
         counts = []
         for budget in (2, 128):
             solver, problem = _problem(

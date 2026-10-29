@@ -34,6 +34,11 @@ from ...core.types import FloatType, to_warp_int32_array
 from ..core import DenseLinearOperatorData, DenseSquareMultiLinearInfo
 from ..linear import DirectSolver
 from . import rcm_batch as _rcm_batch
+from .llt_blocked import (
+    LLT_BLOCKED_FACTORIZE_SHARED_TILES,
+    LLT_BLOCKED_SOLVE_SHARED_TILES,
+    fit_llt_blocked_block_size,
+)
 from .llt_blocked_rcm import (
     llt_blocked_rcm_factorize,
     llt_blocked_rcm_factorize_parallel,
@@ -229,7 +234,14 @@ class LLTBlockedRCMSolver(DirectSolver[wp.float32, wp.int32]):
         self._structural_pattern: wp.array[wp.int32] | None = None
         self._structural_ready: wp.array[wp.int32] | None = None
 
-        # Cache the fixed block/tile dimensions
+        # Cache the fixed block/tile dimensions. The tile size drives the tile pattern and every
+        # numeric kernel, so shrink it as a whole where its tiles exceed the device's shared
+        # memory per block.
+        kernel_device = wp.get_device(device)
+        block_size = min(
+            fit_llt_blocked_block_size(block_size, kernel_device, LLT_BLOCKED_FACTORIZE_SHARED_TILES),
+            fit_llt_blocked_block_size(block_size, kernel_device, LLT_BLOCKED_SOLVE_SHARED_TILES),
+        )
         self._block_size: int = block_size
         self._solve_block_dim: int = solve_block_dim
         self._factorize_block_dim: int = factorize_block_dim
