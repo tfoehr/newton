@@ -259,9 +259,12 @@ def begin_iteration(
     state: wp.array[APGDState],
     searching: wp.array[wp.bool],
     condition: wp.array[wp.int32],
+    reset: wp.array[wp.int32],
 ):
-    """Start a backtracking search for each active QP."""
+    """Start a backtracking search for each active QP and zero ``reset[0]``."""
     wid = wp.tid()
+    if wid == 0:
+        reset[0] = 0
     searching[wid] = inner[wid]
     if inner[wid]:
         entry = state[wid]
@@ -622,9 +625,12 @@ def dense_matvec(
     mask: wp.array[wp.bool],
     x: wp.array[wp.float32],
     y: wp.array[wp.float32],
+    reset: wp.array[wp.int32],
 ):
-    """Apply the existing dense Delassus matrix to active worlds."""
+    """Apply the existing dense Delassus matrix to active worlds and zero ``reset[0]``."""
     wid, row = wp.tid()
+    if wid == 0 and row == 0:
+        reset[0] = 0
     if not mask[wid] or row >= dim[wid]:
         return
     value = wp.float32(0.0)
@@ -640,9 +646,12 @@ def copy_active(
     mask: wp.array[wp.bool],
     source: wp.array[wp.float32],
     target: wp.array[wp.float32],
+    reset: wp.array[wp.int32],
 ):
-    """Preserve completed worlds when a sparse product clears its output buffer."""
+    """Preserve completed worlds when a sparse product clears its output buffer; zero ``reset[0]``."""
     wid, row = wp.tid()
+    if wid == 0 and row == 0:
+        reset[0] = 0
     if mask[wid] and row < dim[wid]:
         i = vio[wid] + row
         target[i] = source[i]

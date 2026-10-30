@@ -78,6 +78,7 @@ from ..kinematics.constraints import get_max_constraints_per_world
 from ..kinematics.jacobians import ColMajorSparseConstraintJacobians, DenseSystemJacobians, SparseSystemJacobians
 from ..kinematics.limits import LimitsKamino
 from ..linalg import DenseLinearOperatorData, DenseSquareMultiLinearInfo, LinearSolverType
+from ..linalg.blas import block_sparse_transpose_matvec
 from ..linalg.linear import IterativeSolver
 from ..linalg.sparse_matrix import BlockDType, BlockSparseMatrices
 from ..linalg.sparse_operator import BlockSparseLinearOperators
@@ -1246,6 +1247,16 @@ class DelassusOperator:
         return self._solver.solve_inplace(x=x)
 
 
+@wp.kernel
+def _zero_two_vectors_kernel(a: wp.array[wp.float32], b: wp.array[wp.float32]):
+    """Zero two vectors in one launch (each launch is a graph node with a fixed cost)."""
+    i = wp.tid()
+    if i < a.shape[0]:
+        a[i] = wp.float32(0.0)
+    if i < b.shape[0]:
+        b[i] = wp.float32(0.0)
+
+
 class BlockSparseMatrixFreeDelassusOperator(BlockSparseLinearOperators[wp.float32, wp.int32]):
     """
     A matrix-free Delassus operator for representing and operating on multiple independent sparse
@@ -1990,16 +2001,25 @@ class BlockSparseMatrixFreeDelassusOperator(BlockSparseLinearOperators[wp.float3
             self.update()
 
         v = self._vec_temp_body_space
-        v.zero_()
+        regularized = self._eta is not None or self._combined_regularization is not None
+        # The regularized product accumulates into y. When x and y are distinct, zero v and y in one
+        # launch and skip the transpose product's own (masked) zeroing of v: same values, two fewer
+        # launches (graph nodes) per product.
+        fuse_zeroing = regularized and self.ATy_op is block_sparse_transpose_matvec and x.ptr != y.ptr
+        if fuse_zeroing:
+            wp.launch(_zero_two_vectors_kernel, dim=max(v.shape[0], y.shape[0]), inputs=[v, y], device=self.device)
+            self.ATy_op(self._transpose_op_matrix, x, v, world_mask, zero_output=False)
+        else:
+            v.zero_()
+            # Compute first Jacobian matrix-vector product: v <- (P @ J)^T @ x
+            self.ATy_op(self._transpose_op_matrix, x, v, world_mask)
 
-        # Compute first Jacobian matrix-vector product: v <- (P @ J)^T @ x
-        self.ATy_op(self._transpose_op_matrix, x, v, world_mask)
-
-        if self._eta is None and self._combined_regularization is None:
+        if not regularized:
             # Compute second Jacobian matrix-vector product: y <- (P @ J @ M^-1) @ v
             self.Ax_op(self.bsm, v, y, world_mask)
         else:
-            y.zero_()
+            if not fuse_zeroing:
+                y.zero_()
             # Compute y <- (P @ J @ M^-1) @ v + diag(eta) @ x
             wp.launch(
                 kernel=_make_block_sparse_gemv_regularization_kernel(1.0),
@@ -2060,7 +2080,11 @@ class BlockSparseMatrixFreeDelassusOperator(BlockSparseLinearOperators[wp.float3
         v.zero_()
 
         # Compute first Jacobian matrix-vector product: v <- (P @ J)^T @ x
-        self.ATy_op(self._transpose_op_matrix, x, v, world_mask)
+        # (v is already zeroed, so the default operator skips its masked zeroing launch)
+        if self.ATy_op is block_sparse_transpose_matvec:
+            self.ATy_op(self._transpose_op_matrix, x, v, world_mask, zero_output=False)
+        else:
+            self.ATy_op(self._transpose_op_matrix, x, v, world_mask)
 
         if self._eta is None and self._combined_regularization is None:
             # Compute second Jacobian matrix-vector product as general matrix-vector product:
