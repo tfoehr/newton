@@ -1182,6 +1182,7 @@ def block_sparse_transpose_matvec(
     y: wp.array[wp.float32] | wp.array2d[wp.float32],
     x: wp.array[wp.float32] | wp.array2d[wp.float32],
     matrix_mask: wp.array[wp.bool],
+    zero_output: bool = True,
 ):
     """
     Launch kernel for block-sparse transpose matrix-vector product: x = A^T * y
@@ -1194,14 +1195,17 @@ def block_sparse_transpose_matvec(
             version; or shape (num_matrices, max_of_max_cols) for the 2D version.
         matrix_mask: Per-matrix boolean flag for whether to perform the operation. Blocks of `x`, that
             correspond to matrices for which the mask is `False`, are left unchanged.
+        zero_output: Whether to zero the blocks of `x` of the selected matrices before accumulating
+            the product. Callers that have already zeroed `x` pass `False` to save a kernel launch.
     """
     if len(x.shape) == 1:
-        wp.launch(
-            kernel=_make_masked_zero_kernel_1d(A.nzb_dtype.dtype),
-            dim=(A.num_matrices, A.max_of_max_dims[1]),
-            inputs=[A.col_start, A.max_cols, matrix_mask, x],
-            device=A.device,
-        )
+        if zero_output:
+            wp.launch(
+                kernel=_make_masked_zero_kernel_1d(A.nzb_dtype.dtype),
+                dim=(A.num_matrices, A.max_of_max_dims[1]),
+                inputs=[A.col_start, A.max_cols, matrix_mask, x],
+                device=A.device,
+            )
         wp.launch(
             kernel=_make_block_sparse_transpose_matvec_kernel(A.nzb_dtype),
             dim=(A.num_matrices, A.max_of_num_nzb),
@@ -1219,12 +1223,13 @@ def block_sparse_transpose_matvec(
             device=A.device,
         )
     else:
-        wp.launch(
-            kernel=_make_masked_zero_kernel_2d(A.nzb_dtype.dtype),
-            dim=(A.num_matrices, A.max_of_max_dims[1]),
-            inputs=[matrix_mask, x],
-            device=A.device,
-        )
+        if zero_output:
+            wp.launch(
+                kernel=_make_masked_zero_kernel_2d(A.nzb_dtype.dtype),
+                dim=(A.num_matrices, A.max_of_max_dims[1]),
+                inputs=[matrix_mask, x],
+                device=A.device,
+            )
         wp.launch(
             kernel=_make_block_sparse_transpose_matvec_kernel_2d(A.nzb_dtype),
             dim=(A.num_matrices, A.max_of_num_nzb),

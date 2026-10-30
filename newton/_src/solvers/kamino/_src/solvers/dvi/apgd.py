@@ -167,6 +167,10 @@ class UnilateralAPGD:
         self.correction_condition = wp.zeros(1, dtype=wp.int32, device=self.device)
         self.inner_condition = wp.zeros_like(self.correction_condition)
         self.search_condition = wp.zeros_like(self.correction_condition)
+        # Loop conditions are zeroed by the last kernel before the kernel that counts into them
+        # (``reset`` arguments) instead of by separate memsets: each launch is a graph node with a
+        # fixed cost. Launches that zero nothing write this scratch word.
+        self._no_reset = wp.zeros_like(self.correction_condition)
         self.scale_condition = wp.zeros_like(self.correction_condition)
         self.x = wp.zeros(max(1, size.sum_of_max_total_cts), device=self.device)
         self.probe = wp.zeros_like(self.x)
@@ -193,23 +197,25 @@ class UnilateralAPGD:
         """Launch a row operation or a deterministic per-world reduction."""
         wp.launch(kernel, dim=self.rows if rows else self.owner.size.num_worlds, inputs=args, device=self.device)
 
-    def full_matvec(self, x, y, mask):
+    def full_matvec(self, x, y, mask, reset=None):
         """Apply the full Delassus operator to the selected worlds.
 
         Args:
             x: Input vector in the full constraint layout.
             y: Output product; entries in unselected worlds are preserved.
             mask: Per-world flag selecting operator products.
+            reset: Optional single-element counter zeroed by the final launch.
         """
         problem = self.problem
         data = problem.data
+        reset = self._no_reset if reset is None else reset
         if problem.sparse:
             problem.delassus.matvec(x, self.sparse_product, mask)
-            self._launch(kernels.copy_active, [data.dim, data.vio, mask, self.sparse_product, y], rows=True)
+            self._launch(kernels.copy_active, [data.dim, data.vio, mask, self.sparse_product, y, reset], rows=True)
         else:
-            self._launch(kernels.dense_matvec, [data.dim, data.mio, data.vio, data.D, mask, x, y], rows=True)
+            self._launch(kernels.dense_matvec, [data.dim, data.mio, data.vio, data.D, mask, x, y, reset], rows=True)
 
-    def matvec(self, x, y, mask):
+    def matvec(self, x, y, mask, reset=None):
         """Apply the unilateral operator, including the optional Schur response.
 
         Unilateral entries of the output contain ``D_uu x`` or
@@ -220,11 +226,14 @@ class UnilateralAPGD:
             x: Input vector with zero bilateral entries.
             y: Output product; only unilateral entries are used by APGD.
             mask: Per-world flag selecting operator products.
+            reset: Optional single-element loop condition zeroed by the final launch, after
+                every earlier launch of the product.
         """
-        self.full_matvec(x, y, mask)
         owner = self.owner
         if not owner._use_schur_complement or owner._bilateral_solver is None:
+            self.full_matvec(x, y, mask, reset)
             return
+        self.full_matvec(x, y, mask)
         data = self.problem.data
         operator = owner.data.bilateral_operator
         scale = owner.data.state.bilateral_preconditioner
@@ -245,7 +254,7 @@ class UnilateralAPGD:
             [data.dim, data.vio, data.njc, operator.info.vio, scale, self.response_solution, x, self.response],
             rows=True,
         )
-        self.full_matvec(self.response, y, mask)
+        self.full_matvec(self.response, y, mask, reset)
 
     def solve(self, problem, *, block_iteration=-1):
         """Update unilateral impulses through bounded frozen-correction solves.
@@ -344,8 +353,7 @@ class UnilateralAPGD:
                 ],
                 rows=True,
             )
-            self.matvec(self.candidate, self.product_candidate, self.searching)
-            self.search_condition.zero_()
+            self.matvec(self.candidate, self.product_candidate, self.searching, reset=self.search_condition)
             self._launch(
                 kernels.check_descent,
                 [
@@ -366,11 +374,13 @@ class UnilateralAPGD:
 
         def inner_body():
             """Advance one accelerated projected step, with bounded backtracking."""
-            self.matvec(self.y, self.product_y, self.inner)
-            self.search_condition.zero_()
-            self._launch(kernels.begin_iteration, [self.inner, self.state, self.searching, self.search_condition])
+            self.matvec(self.y, self.product_y, self.inner, reset=self.search_condition)
+            # also zeroes inner_condition, which nothing reads before accept_iteration counts into it
+            self._launch(
+                kernels.begin_iteration,
+                [self.inner, self.state, self.searching, self.search_condition, self.inner_condition],
+            )
             wp.capture_while(self.search_condition, while_body=search_body)
-            self.inner_condition.zero_()
             self._launch(
                 kernels.accept_iteration,
                 [
@@ -392,8 +402,7 @@ class UnilateralAPGD:
         def correction_body():
             """Freeze the correction, solve its QP, and check the nonlinear contact law."""
             wp.copy(self.previous, self.x)
-            self.matvec(self.x, self.product, self.active)
-            self.inner_condition.zero_()
+            self.matvec(self.x, self.product, self.active, reset=self.inner_condition)
             self._launch(
                 kernels.begin_correction,
                 [self.active, self.operator_scale, self.state, self.inner, self.inner_condition],
@@ -418,8 +427,7 @@ class UnilateralAPGD:
             self._launch(
                 kernels.relax_correction, [*layout, self.active, self.config, self.previous, self.x], rows=True
             )
-            self.matvec(self.x, self.product, self.active)
-            self.correction_condition.zero_()
+            self.matvec(self.x, self.product, self.active, reset=self.correction_condition)
             self._launch(
                 kernels.finish_correction,
                 [
